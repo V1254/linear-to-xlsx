@@ -1,6 +1,5 @@
 const fs = require("fs");
 const readLine = require("readline");
-const Excel = require("exceljs");
 
 const maximumRows = 1000000; // excels row limit per sheet
 

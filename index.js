@@ -1,91 +1,88 @@
+require("dotenv").config();
 const glob = require("glob");
-const fs = require("fs");
-const readLine = require("readline");
-const officegen = require("officegen");
+const addToSheet = require("./writeToSheet");
+const Excel = require("exceljs");
 
-const APO_TYPES = {
-  ADDITIVE: "APO_Additive",
-  //   DOMINANT: "APO_Dominant",
-  //   GENOTYPIC: "APO_Genotypic",
-  //   RECESIVE: "APO_Recessive",
-};
-const BASE_PATH = "D:/v3/";
-const OUTPUT_PATH = "D:/v3/parsed/";
+const types = ["_Additive.", "_Dominant.", "_Genotypic.", "_Recessive."];
+const BASE_PATH = process.env.PATH_TO_FILES;
+const OUTPUT_PATH = process.env.PATH_TO_OUTPUT;
 
-process.chdir(BASE_PATH); // navigate to the path above so we can pattern match
-Object.keys(APO_TYPES).forEach((type) => {
-  const stringToMatch = APO_TYPES[type];
-  glob(`*${stringToMatch}*.linear`, (err, files) => {
-    console.info(`Working on ${stringToMatch} Sheets`);
-    files.forEach(async (file, index) => {
-      if (index !== 0) return;
+// navigate to the path
+process.chdir(BASE_PATH);
 
-      const fileInStream = fs.createReadStream(file);
-      const rl = readLine.createInterface({
-        input: fileInStream,
-        crlfDelay: Infinity,
+const generateBooks = (filesToMatch, currentFileName) =>
+  new Promise((resolve, resject) => {
+    glob(`*${filesToMatch}*.linear`, async (err, files) => {
+      let currentWorkBook = new Excel.stream.xlsx.WorkbookWriter({
+        filename: OUTPUT_PATH + currentFileName + ".xlsx",
       });
+      let index = 1;
+      const _gentypicCount = parseInt(process.env.MAX_FILE_PER_BOOK_Genotypic); // only fit 3 genotypic files per book so it doesn't get huge
+      let _createGntypicCount = 0;
+      for (const fileName of files) {
+        console.log(`\nProcessing ${index} of ${files.length}\n`);
+        index++;
+        const splitByDot = fileName.split("."); // Additive.transform.., .glim
+        const sheetName = splitByDot[1]
+          .replace(/transformed_EDU_/, "")
+          .replace(/transformed_APO_/, "")
+          .replace(/transformed_MIG_/, "");
+        if (filesToMatch === "_Genotypic." && _createGntypicCount >= _gentypicCount) {
+          console.log(
+            `Hit max Files for current workbook [${_createGntypicCount}|${_gentypicCount}] saving current workbook: ${currentFileName}.xlsx`
+          );
+          await currentWorkBook.commit();
 
-      const fileOutStream = fs.createWriteStream(`${OUTPUT_PATH}${stringToMatch}.xlsx`);
+          console.log(`Finished saving ${currentFileName}.xlsx`);
 
-      const xlsx = officegen("xlsx");
+          // nextFileName
+          const splitCurrentFileName = currentFileName.split("-");
+          if (splitCurrentFileName.length === 1) {
+            // first addition we are doing
+            currentFileName = currentFileName + "-1";
+          } else {
+            currentFileName =
+              splitCurrentFileName[0] + "-" + (parseInt(splitCurrentFileName[1]) + 1);
+          }
 
-      //   xlsx.on("finalize", (writter) => console.log(`Finished writing to spreadhseet`));
-
-      xlsx.on("error", (err) => console.log(`failed somewhere `, err));
-
-      const sheet = xlsx.makeNewSheet();
-      sheet.name = stringToMatch;
-
-      let columns = [];
-      let currentData = [];
-      let columnIndex = 0;
-      let rowCount = 0;
-      rl.on("line", (lineData) => {
-        if (!columnIndex) {
-          // first column and hence the columns
-          console.log(`Columns is: ${lineData}`);
-          columns = lineData.split(/\t/);
-          // A1 (65) Z1
-          //   let startCharCode = 65;
-          //   const startRow = 1;
-          //   const excelColumns = new Array(columns.length).map((el, index) => {
-
-          //   })
-
-          // create the columns in the spreadsheet
-          let startCharCode = 65; // letter A = 65 , B=66 etc...
-          columns.forEach((column) => {
-            const toChar = String.fromCharCode(startCharCode);
-            sheet.setCell(`${toChar}1`, column);
-            startCharCode++;
+          // new workbook
+          currentWorkBook = new Excel.stream.xlsx.WorkbookWriter({
+            filename: OUTPUT_PATH + currentFileName + ".xlsx",
           });
-          xlsx.generate(fileOutStream);
-          columnIndex++;
+
+          _createGntypicCount = 0;
         }
 
-        if (rowCount > 10) return;
-        //
-        rowCount++;
-        currentData = lineData.split(/\t/);
-        let startCharCode = 65; // letter A = 65 , B=66 etc...
-        currentData.forEach((data) => {
-          const toChar = String.fromCharCode(startCharCode);
-          sheet.setCell(`${toChar}1`, data);
-          startCharCode++;
-        });
-        xlsx.generate(fileOutStream);
-      });
+        console.log(`Adding file: ${fileName} to ${currentFileName}.xlsx`);
 
-      //   fs.readFile(value, (err, data) => {
-      //     if (!err && data) {
-      //       console.log(`data: `, data);
-      //     }
-      //   });
+        const sheet = currentWorkBook.addWorksheet(sheetName);
+        await addToSheet(sheetName, sheet, fileName, currentWorkBook);
+
+        console.log(`\n\n======================================\n`);
+
+        // increment the count after adding to the workbook for this file
+        if (filesToMatch === "_Genotypic.") {
+          _createGntypicCount++;
+        }
+      }
+      console.log(`Finished Processing all ${filesToMatch} sheets, committing`);
+      await currentWorkBook.commit();
+      resolve();
     });
-
-    rl;
   });
-});
 
-// glob("D:/v3/*.linear", (err, files) => console.log(`errro: ${err}`, files));
+const main = async () => {
+  for (let i = 0; i < types.length; i++) {
+    const currentType = types[i];
+    let currentFileName = currentType.split("_")[1].replace(".", "");
+    console.log(`======================================`);
+    console.log(`\nStarting Work on ${currentType} files \n`);
+    // let currentWorkBook = new Excel.stream.xlsx.WorkbookWriter({
+    //   filename: OUTPUT_PATH + currentFileName + ".xlsx",
+    // });
+
+    await generateBooks(currentType, currentFileName);
+  }
+};
+
+main();
